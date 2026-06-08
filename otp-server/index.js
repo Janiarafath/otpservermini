@@ -7,11 +7,16 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const MSG91_AUTH_KEY = process.env.MSG91_AUTH_KEY || '523782ASmyQHfuq6a25aeacP1';
+const PHONEEMAIL_API_KEY = process.env.PHONEEMAIL_API_KEY || 'bQ4PSEuP75HWxDnFe9xEQwAIz1jAmGv3';
+const PHONEEMAIL_FROM_PHONE = process.env.PHONEEMAIL_FROM_PHONE || '8148647818';
 const OTP_EXPIRY = 300; // 5 minutes
 
-// In-memory OTP store (one user, fine for single-user app)
+// In-memory OTP store
 const otpStore = {};
+
+app.get('/', (req, res) => {
+  res.json({ status: 'OK', message: 'OTP server running' });
+});
 
 app.post('/api/send-otp', (req, res) => {
   const { phone } = req.body;
@@ -20,37 +25,44 @@ app.post('/api/send-otp', (req, res) => {
   const code = crypto.randomInt(100000, 999999).toString();
   otpStore[phone] = { code, expires: Date.now() + OTP_EXPIRY * 1000 };
 
-  if (MSG91_AUTH_KEY) {
-    const postData = JSON.stringify({ mobile: phone.replace(/\D/g, '') });
+  const toPhone = phone.replace(/\D/g, '');
+  const message = `Your Veloride OTP is: ${code}. Valid for 5 minutes.`;
+  const messageBase64 = Buffer.from(message).toString('base64');
 
-    const options = {
-      hostname: 'api.msg91.com',
-      path: '/api/v5/otp',
-      method: 'POST',
-      headers: {
-        'authkey': MSG91_AUTH_KEY,
-        'Content-Type': 'application/json',
-      },
-    };
+  const postData = JSON.stringify({
+    apiKey: PHONEEMAIL_API_KEY,
+    fromCountryCode: '+91',
+    fromPhoneNo: PHONEEMAIL_FROM_PHONE,
+    toCountrycode: '+91',
+    toPhoneNo: toPhone,
+    subject: `OTP - ${code} from Veloride`,
+    messageBody: messageBase64,
+    tinyFlag: true,
+  });
 
-    const reqMsg = https.request(options, (resMsg) => {
-      let data = '';
-      resMsg.on('data', (chunk) => data += chunk);
-      resMsg.on('end', () => {
-        console.log('MSG91 response:', data);
-        res.json({ success: true, message: 'OTP sent' });
-      });
+  const options = {
+    hostname: 'api.phone.email',
+    path: '/v1/sendmail',
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+  };
+
+  const reqPh = https.request(options, (resPh) => {
+    let data = '';
+    resPh.on('data', (chunk) => data += chunk);
+    resPh.on('end', () => {
+      console.log('phone.email response:', data);
+      res.json({ success: true, message: 'OTP sent' });
     });
-    reqMsg.on('error', (e) => {
-      console.error('MSG91 error:', e);
-      res.status(500).json({ error: 'Failed to send OTP via SMS' });
-    });
-    reqMsg.write(postData);
-    reqMsg.end();
-  } else {
-    console.log(`[DEV] OTP for ${phone}: ${code}`);
-    res.json({ success: true, message: 'OTP sent (dev mode)' });
-  }
+  });
+  reqPh.on('error', (e) => {
+    console.error('phone.email error:', e);
+    res.status(500).json({ error: 'Failed to send OTP via SMS' });
+  });
+  reqPh.write(postData);
+  reqPh.end();
 });
 
 app.post('/api/verify-otp', (req, res) => {
