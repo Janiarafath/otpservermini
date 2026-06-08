@@ -7,8 +7,6 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-const PHONEEMAIL_API_KEY = process.env.PHONEEMAIL_API_KEY || 'bQ4PSEuP75HWxDnFe9xEQwAIz1jAmGv3';
-const PHONEEMAIL_FROM_PHONE = process.env.PHONEEMAIL_FROM_PHONE || '8148647818';
 const OTP_EXPIRY = 300; // 5 minutes
 
 // In-memory OTP store
@@ -25,44 +23,54 @@ app.post('/api/send-otp', (req, res) => {
   const code = crypto.randomInt(100000, 999999).toString();
   otpStore[phone] = { code, expires: Date.now() + OTP_EXPIRY * 1000 };
 
-  const toPhone = phone.replace(/\D/g, '');
-  const message = `Your Veloride OTP is: ${code}. Valid for 5 minutes.`;
-  const messageBase64 = Buffer.from(message).toString('base64');
-
+  const toPhone = phone.replace(/\D/g, '').slice(-10);
   const postData = JSON.stringify({
-    apiKey: PHONEEMAIL_API_KEY,
-    fromCountryCode: '+91',
-    fromPhoneNo: PHONEEMAIL_FROM_PHONE,
-    toCountrycode: '+91',
-    toPhoneNo: toPhone,
-    subject: `OTP - ${code} from Veloride`,
-    messageBody: messageBase64,
-    tinyFlag: true,
+    apiKey: process.env.MERAOTP_API_KEY || '59076211e095cce1a422b7cdc8',
+    mobileNo: toPhone,
+    messageType: 'AUTH_OTP',
+    brandName: 'Veloride',
+    otp: code,
+    senderId: 'MRAOTP',
   });
 
   const options = {
-    hostname: 'api.phone.email',
-    path: '/v1/sendmail',
+    hostname: 'meraotp.in',
+    path: '/api/sendSMS',
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
     },
+    timeout: 15000,
   };
 
-  const reqPh = https.request(options, (resPh) => {
+  const reqMera = https.request(options, (resMera) => {
     let data = '';
-    resPh.on('data', (chunk) => data += chunk);
-    resPh.on('end', () => {
-      console.log('phone.email response:', data);
-      res.json({ success: true, message: 'OTP sent' });
+    resMera.on('data', (chunk) => data += chunk);
+    resMera.on('end', () => {
+      console.log('MeraOTP response:', data);
+      try {
+        const parsed = JSON.parse(data);
+        if (parsed.success) {
+          res.json({ success: true, message: 'OTP sent' });
+        } else {
+          res.status(502).json({ error: 'SMS failed', detail: parsed.message });
+        }
+      } catch {
+        res.status(502).json({ error: 'SMS provider error', detail: data });
+      }
     });
   });
-  reqPh.on('error', (e) => {
-    console.error('phone.email error:', e);
-    res.status(500).json({ error: 'Failed to send OTP via SMS' });
+  reqMera.on('timeout', () => {
+    reqMera.destroy();
+    console.error('MeraOTP timeout');
+    res.status(504).json({ error: 'SMS provider timeout' });
   });
-  reqPh.write(postData);
-  reqPh.end();
+  reqMera.on('error', (e) => {
+    console.error('MeraOTP error:', e.message);
+    res.status(500).json({ error: 'Failed to send OTP via SMS', detail: e.message });
+  });
+  reqMera.write(postData);
+  reqMera.end();
 });
 
 app.post('/api/verify-otp', (req, res) => {
